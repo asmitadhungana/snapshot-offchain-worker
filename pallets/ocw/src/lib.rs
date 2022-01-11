@@ -101,20 +101,7 @@ pub mod pallet {
 			self.public.clone()
 		}
 	}
-
-	// ref: https://serde.rs/container-attrs.html#crate
-	#[derive(Deserialize, Encode, Decode, Default, RuntimeDebug, scale_info::TypeInfo)]
-	struct HackerNewsInfo {
-		// Specify our own deserializing function to convert JSON string to vector of bytes
-		#[serde(deserialize_with = "de_string_to_bytes")]
-		by: Vec<u8>,
-		#[serde(deserialize_with = "de_string_to_bytes")]
-		title: Vec<u8>,
-		#[serde(deserialize_with = "de_string_to_bytes")]
-		url: Vec<u8>,
-		descendants: u32,
-	}
-
+	
 	// ref: https://serde.rs/container-attrs.html#crate
 	#[derive(Deserialize, Encode, Decode, Default, RuntimeDebug, scale_info::TypeInfo)]
 	struct SnapshotInfo {
@@ -189,31 +176,14 @@ pub mod pallet {
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-		/// Offchain Worker entry point.
-		///
-		/// By implementing `fn offchain_worker` you declare a new offchain worker.
-		/// This function will be called when the node is fully synced and a new best block is
-		/// succesfuly imported.
-		/// Note that it's not guaranteed for offchain workers to run on EVERY block, there might
-		/// be cases where some blocks are skipped, or for some the worker runs twice (re-orgs),
-		/// so the code should be able to handle that.
-		/// You can use `Local Storage` API to coordinate runs of the worker.
 		fn offchain_worker(block_number: T::BlockNumber) {
 
 			log::info!("Hello from pallet-ocw.");
 
-			// Here we are showcasing various techniques used when running off-chain workers (ocw)
-			// 1. Sending signed transaction from ocw
-			// 2. Sending unsigned transaction from ocw
-			// 3. Sending unsigned transactions with signed payloads from ocw
-			// 4. Fetching JSON via http requests in ocw
-			const TX_TYPES: u32 = 4;
+			const TX_TYPES: u32 = 1;
 			let modu = block_number.try_into().map_or(TX_TYPES, |bn: usize| (bn as u32) % TX_TYPES);
 			let result = match modu {
-				0 => Self::offchain_signed_tx(block_number),
-				1 => Self::offchain_unsigned_tx(block_number),
-				2 => Self::offchain_unsigned_tx_signed_payload(block_number),
-				3 => Self::fetch_remote_info(),
+				0 => Self::fetch_remote_info(),
 				_ => Err(Error::<T>::UnknownOffchainMux),
 			};
 
@@ -223,93 +193,11 @@ pub mod pallet {
 		}
 	}
 
-	#[pallet::validate_unsigned]
-	impl<T: Config> ValidateUnsigned for Pallet<T> {
-		type Call = Call<T>;
-
-		/// Validate unsigned call to this module.
-		///
-		/// By default unsigned transactions are disallowed, but implementing the validator
-		/// here we make sure that some particular calls (the ones produced by offchain worker)
-		/// are being whitelisted and marked as valid.
-		fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
-			let valid_tx = |provide| ValidTransaction::with_tag_prefix("ocw-demo")
-				.priority(UNSIGNED_TXS_PRIORITY)
-				.and_provides([&provide])
-				.longevity(3)
-				.propagate(true)
-				.build();
-
-			match call {
-				Call::submit_number_unsigned { number: _number } => valid_tx(b"submit_number_unsigned".to_vec()),
-				Call::submit_number_unsigned_with_signed_payload {
-					ref payload,
-					ref signature
-				} => {
-					if !SignedPayload::<T>::verify::<T::AuthorityId>(payload, signature.clone()) {
-						return InvalidTransaction::BadProof.into();
-					}
-					valid_tx(b"submit_number_unsigned_with_signed_payload".to_vec())
-				},
-				_ => InvalidTransaction::Call.into(),
-			}
-		}
-	}
 
 	#[pallet::call]
-	impl<T: Config> Pallet<T> {
-		#[pallet::weight(10000)]
-		pub fn submit_number_signed(origin: OriginFor<T>, number: u64) -> DispatchResult {
-			let who = ensure_signed(origin)?;
-			log::info!("submit_number_signed: ({}, {:?})", number, who);
-			Self::append_or_replace_number(number);
-
-			Self::deposit_event(Event::NewNumber(Some(who), number));
-			Ok(())
-		}
-
-		#[pallet::weight(10000)]
-		pub fn submit_number_unsigned(origin: OriginFor<T>, number: u64) -> DispatchResult {
-			let _ = ensure_none(origin)?;
-			log::info!("submit_number_unsigned: {}", number);
-			Self::append_or_replace_number(number);
-
-			Self::deposit_event(Event::NewNumber(None, number));
-			Ok(())
-		}
-
-		#[pallet::weight(10000)]
-		#[allow(unused_variables)]
-		pub fn submit_number_unsigned_with_signed_payload(
-			origin: OriginFor<T>,
-			payload: Payload<T::Public>,
-			signature: T::Signature) -> DispatchResult
-		{
-			let _ = ensure_none(origin)?;
-			// we don't need to verify the signature here because it has been verified in
-			//   `validate_unsigned` function when sending out the unsigned tx.
-			let Payload { number, public } = payload;
-			log::info!("submit_number_unsigned_with_signed_payload: ({}, {:?})", number, public);
-			Self::append_or_replace_number(number);
-
-			Self::deposit_event(Event::NewNumber(None, number));
-			Ok(())
-		}
-	}
+	impl<T: Config> Pallet<T> {}
 
 	impl<T: Config> Pallet<T> {
-		/// Append a new number to the tail of the list, removing an element from the head if reaching
-		///   the bounded length.
-		fn append_or_replace_number(number: u64) {
-			Numbers::<T>::mutate(|numbers| {
-				if numbers.len() == NUM_VEC_LEN {
-					let _ = numbers.pop_front();
-				}
-				numbers.push_back(number);
-				log::info!("Number vector: {:?}", numbers);
-			});
-		}
-
 		/// Check if we have fetched the data before. If yes, we can use the cached version
 		///   stored in off-chain worker storage `storage`. If not, we fetch the remote info and
 		///   write the info into the storage for future retrieval.
@@ -436,80 +324,6 @@ pub mod pallet {
 
 			// Next we fully read the response body and collect it to a vector of bytes.
 			Ok(response.body().collect::<Vec<u8>>())
-		}
-
-		fn offchain_signed_tx(block_number: T::BlockNumber) -> Result<(), Error<T>> {
-			// We retrieve a signer and check if it is valid.
-			//   Since this pallet only has one key in the keystore. We use `any_account()1 to
-			//   retrieve it. If there are multiple keys and we want to pinpoint it, `with_filter()` can be chained,
-			let signer = Signer::<T, T::AuthorityId>::any_account();
-
-			// Translating the current block number to number and submit it on-chain
-			let number: u64 = block_number.try_into().unwrap_or(0);
-
-			// `result` is in the type of `Option<(Account<T>, Result<(), ()>)>`. It is:
-			//   - `None`: no account is available for sending transaction
-			//   - `Some((account, Ok(())))`: transaction is successfully sent
-			//   - `Some((account, Err(())))`: error occured when sending the transaction
-			let result = signer.send_signed_transaction(|_acct|
-				// This is the on-chain function
-				Call::submit_number_signed { number }
-			);
-
-			// Display error if the signed tx fails.
-			if let Some((acc, res)) = result {
-				if res.is_err() {
-					log::error!("failure: offchain_signed_tx: tx sent: {:?}", acc.id);
-					return Err(<Error<T>>::OffchainSignedTxError);
-				}
-				// Transaction is sent successfully
-				return Ok(());
-			}
-
-			// The case of `None`: no account is available for sending
-			log::error!("No local account available");
-			Err(<Error<T>>::NoLocalAcctForSigning)
-		}
-
-		fn offchain_unsigned_tx(block_number: T::BlockNumber) -> Result<(), Error<T>> {
-			let number: u64 = block_number.try_into().unwrap_or(0);
-			let call = Call::submit_number_unsigned { number };
-
-			// `submit_unsigned_transaction` returns a type of `Result<(), ()>`
-			//   ref: https://substrate.dev/rustdocs/v2.0.0/frame_system/offchain/struct.SubmitTransaction.html#method.submit_unsigned_transaction
-			SubmitTransaction::<T, Call<T>>::submit_unsigned_transaction(call.into())
-			.map_err(|_| {
-				log::error!("Failed in offchain_unsigned_tx");
-				<Error<T>>::OffchainUnsignedTxError
-			})
-		}
-
-		fn offchain_unsigned_tx_signed_payload(block_number: T::BlockNumber) -> Result<(), Error<T>> {
-			// Retrieve the signer to sign the payload
-			let signer = Signer::<T, T::AuthorityId>::any_account();
-
-			let number: u64 = block_number.try_into().unwrap_or(0);
-
-			// `send_unsigned_transaction` is returning a type of `Option<(Account<T>, Result<(), ()>)>`.
-			//   Similar to `send_signed_transaction`, they account for:
-			//   - `None`: no account is available for sending transaction
-			//   - `Some((account, Ok(())))`: transaction is successfully sent
-			//   - `Some((account, Err(())))`: error occured when sending the transaction
-			if let Some((_, res)) = signer.send_unsigned_transaction(
-				|acct| Payload { number, public: acct.public.clone() },
-				|payload, signature| Call::submit_number_unsigned_with_signed_payload {
-					payload, signature
-				},
-			) {
-				return res.map_err(|_| {
-					log::error!("Failed in offchain_unsigned_tx_signed_payload");
-					<Error<T>>::OffchainUnsignedTxSignedPayloadError
-				});
-			}
-
-			// The case of `None`: no account is available for sending
-			log::error!("No local account available");
-			Err(<Error<T>>::NoLocalAcctForSigning)
 		}
 	}
 
