@@ -45,12 +45,7 @@ pub mod pallet {
 	/// The type to sign and send transactions.
 	const UNSIGNED_TXS_PRIORITY: u64 = 100;
 
-	// We are fetching information from Hacker News public API
-	// const HTTP_REMOTE_REQUEST: &str = "https://asmitadhungana.github.io/snapshot-mock-api/snapshot.json";
-	// const HTTP_REMOTE_REQUEST: &str = "https://reqres.in/api/products/3";
-	const HTTP_REMOTE_REQUEST: &str = "https://raw.githubusercontent.com/asmitadhungana/snapshot-mock-api/gh-pages/snapshot.json";
-
-	const HTTP_HEADER_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36";
+	const HTTP_REMOTE_REQUEST: &str = "http://0.0.0.0:8000/test.html";
 
 	const FETCH_TIMEOUT_PERIOD: u64 = 3000; // in milli-seconds
 	const LOCK_TIMEOUT_EXPIRATION: u64 = FETCH_TIMEOUT_PERIOD + 1000; // in milli-seconds
@@ -248,19 +243,17 @@ pub mod pallet {
 
 		/// Fetch from remote and deserialize the JSON to a struct
 		fn fetch_n_parse() -> Result<SnapshotInfo, Error<T>> {
-			log::info!("1. fetch n parse error before" );
 			
 			let resp_bytes = Self::fetch_from_remote().map_err(|e| {
 				log::error!("fetch_from_remote error: {:?}", e);
 				<Error<T>>::HttpFetchingError
 			})?;
-			log::info!("1.2. fetch n parse error after" );
-
+			
 			let resp_str = str::from_utf8(&resp_bytes).map_err(|_| <Error<T>>::DeserializeToStrError)?;
 			// Print out our fetched JSON string
-			log::info!("fetch_n_parse: {}", resp_str);
-
+			
 			// Deserializing JSON to struct, thanks to `serde` and `serde_derive`
+
 			let info: SnapshotInfo =
 			serde_json::from_str(&resp_str).map_err(|_| <Error<T>>::DeserializeToObjError)?;
 			Ok(info)
@@ -270,34 +263,28 @@ pub mod pallet {
 		///   and returns the JSON response as vector of bytes.
 		fn fetch_from_remote() -> Result<Vec<u8>, Error<T>> {
 			// Initiate an external HTTP GET request. This is using high-level wrappers from `sp_runtime`.
-			log::info!("Before http request get in fetch from remote..." );
 			let request = http::Request::get(HTTP_REMOTE_REQUEST);
-			log::info!("After request get in fetch from remote..." );
-
+			
 			// Keeping the offchain worker execution time reasonable, so limiting the call to be within 3s.
 			let timeout = sp_io::offchain::timestamp()
 				.add(Duration::from_millis(FETCH_TIMEOUT_PERIOD));
 
 			
-			log::info!("3. fetch from remote error before" );
 			let pending = request
-				.add_header("User-Agent", HTTP_HEADER_USER_AGENT)
+				// .add_header("User-Agent", HTTP_HEADER_USER_AGENT)
 				.deadline(timeout) // Setting the timeout time
 				.send() // Sending the request out by the host
 				.map_err(|e| {
 					log::error!("{:?}", e);
 					<Error<T>>::HttpFetchingError
 				})?;
-			log::info!("3.2. fetch from remote error after" );
-			
 
 			// By default, the http request is async from the runtime perspective. So we are asking the
 			//   runtime to wait here
 			// The returning value here is a `Result` of `Result`, so we are unwrapping it twice by two `?`
 			//   ref: https://docs.substrate.io/rustdocs/latest/sp_runtime/offchain/http/struct.PendingRequest.html#method.try_wait
 
-			log::info!("4. fetch from remote error before" );
-
+			
 			let response = pending
 				.try_wait(timeout)
 				.map_err(|e| {
@@ -310,17 +297,11 @@ pub mod pallet {
 					panic!("panicked 2: {:?}", e);
 					<Error<T>>::HttpFetchingError
 				})?;
-			log::info!("5. fetch from remote error after" );
 			
-
-			log::info!("6. fetch from remote error after" );
-
 			if response.code != 200 {
 				log::error!("Unexpected http request status code: {}", response.code);
 				return Err(<Error<T>>::HttpFetchingError);
 			}
-			log::info!("7. fetch from remote error after" );
-
 
 			// Next we fully read the response body and collect it to a vector of bytes.
 			Ok(response.body().collect::<Vec<u8>>())
